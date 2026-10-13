@@ -74,7 +74,7 @@
             <div class="bg-white p-5 rounded-lg shadow flex flex-col justify-between">
                 <div>
                     <h3 class="font-bold text-gray-700 text-lg border-b pb-2">Điều Khiển & Tiện Ích Web</h3>
-                    <p class="text-sm text-gray-500 mt-2">Lịch sử sự kiện được đồng bộ trực tiếp từ Firebase /HistoryLogs, bạn có thể xuất Excel bất cứ lúc nào.</p>
+                    <p class="text-sm text-gray-500 mt-2">Lịch sử sự kiện được lưu vĩnh viễn trên Firebase /HistoryLogs với thời gian thực chuẩn xác.</p>
                 </div>
                 <div class="mt-4 flex space-x-3">
                     <button onclick="exportToExcel()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded shadow font-medium transition flex items-center space-x-2">
@@ -82,7 +82,7 @@
                         <span>Xuất File Excel Sự Kiện</span>
                     </button>
                     <button onclick="clearHistory()" class="bg-red-100 hover:bg-red-200 text-red-700 px-4 py-2 rounded shadow font-medium transition">
-                        Xóa Lịch Sử
+                        Xóa Lịch Sử Cũ
                     </button>
                 </div>
             </div>
@@ -99,7 +99,7 @@
                     <thead class="bg-gray-50 text-gray-600 text-xs uppercase sticky top-0">
                         <tr>
                             <th class="py-3 px-6 border-b">STT</th>
-                            <th class="py-3 px-6 border-b">Thời Gian (Timestamp)</th>
+                            <th class="py-3 px-6 border-b">Thời Gian Thực</th>
                             <th class="py-3 px-6 border-b">Nội Dung Sự Kiện / Cảnh Báo</th>
                             <th class="py-3 px-6 border-b">Mức Độ</th>
                         </tr>
@@ -175,7 +175,7 @@
             }
         }
 
-        // Đồng hồ thời gian thực
+        // Đồng hồ thời gian thực ở Header
         setInterval(() => {
             const now = new Date();
             document.getElementById('realtime-clock').innerText = now.toLocaleString('vi-VN');
@@ -183,6 +183,8 @@
 
         // --- LẮNG NGHE DỮ LIỆU THỜI GIAN THỰC TỪ /SmartHome ---
         const smartHomeRef = db.ref('/SmartHome');
+        const historyRef = db.ref('/HistoryLogs');
+        let lastStatus = "";
 
         smartHomeRef.on('value', (snapshot) => {
             const data = snapshot.val();
@@ -222,20 +224,43 @@
             if (data.statusText && data.statusText !== "AN TOAN") {
                 bannerEl.classList.remove('hidden');
                 alertTitle.innerText = "CẢNH BÁO: " + data.statusText;
-                alertDesc.innerText = "Hệ thống ghi nhận sự cố khẩn cấp.";
+                alertDesc.innerText = "Hệ thống ghi nhận sự cố khẩn cấp lúc " + new Date().toLocaleTimeString('vi-VN');
                 statusEl.className = "text-xl font-bold text-red-600 mt-2 animate-pulse";
 
                 if (!isWebBuzzerActive) toggleWebBuzzer();
+
+                // Tự động đẩy log với thời gian chuẩn xác từ trình duyệt khi trạng thái thay đổi
+                if (data.statusText !== lastStatus) {
+                    pushEventLog(data.statusText, "Nguy hiểm / Cảnh báo");
+                    lastStatus = data.statusText;
+                }
             } else {
                 bannerEl.classList.add('hidden');
                 statusEl.className = "text-xl font-bold text-green-600 mt-2";
                 if (isWebBuzzerActive) toggleWebBuzzer();
+
+                if (lastStatus && lastStatus !== "AN TOAN") {
+                    pushEventLog("Hệ thống trở lại trạng thái An Toàn", "Thông tin");
+                    lastStatus = "AN TOAN";
+                }
+                if (!lastStatus) lastStatus = "AN TOAN";
             }
         });
 
-        // --- LẮNG NGHE LỊCH SỬ TỪ /HistoryLogs (Đồng bộ chuẩn Object Firebase) ---
-        const historyRef = db.ref('/HistoryLogs');
+        // Hàm đẩy log sự kiện kèm thời gian thực chuẩn vào Firebase
+        function pushEventLog(message, level) {
+            const now = new Date();
+            const timeStr = now.toLocaleString('vi-VN');
+            const newLogRef = historyRef.push();
+            newLogRef.set({
+                time: timeStr,
+                event: message,
+                level: level,
+                timestamp: now.getTime()
+            });
+        }
 
+        // --- LẮNG NGHE LỊCH SỬ TỪ /HistoryLogs ĐỂ HIỂN THỊ ---
         historyRef.orderByChild('timestamp').on('value', (snapshot) => {
             const tbody = document.getElementById('event-log-table');
             tbody.innerHTML = '';
@@ -249,12 +274,12 @@
                 ...data[key]
             }));
 
-            // Sắp xếp tăng dần theo thời gian timestamp
+            // Sắp xếp tăng dần theo thời gian
             logsArray.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
             let stt = 1;
             logsArray.forEach((log) => {
-                let timeDisplay = log.time || new Date(log.timestamp).toLocaleString('vi-VN');
+                let timeDisplay = log.time || (log.timestamp ? new Date(log.timestamp).toLocaleString('vi-VN') : "--");
 
                 eventLogs.push({
                     stt: stt,
@@ -272,21 +297,21 @@
                     <td class="py-3 px-6 border-b font-medium">${log.event || "Không rõ sự kiện"}</td>
                     <td class="py-3 px-6 border-b"><span class="px-2 py-1 rounded text-xs ${isDanger ? 'bg-red-200 text-red-800' : 'bg-blue-200 text-blue-800'}">${log.level || "Thông tin"}</span></td>
                 `;
-                tbody.insertBefore(row, tbody.firstChild); // Đưa sự kiện mới nhất lên trên cùng
+                tbody.insertBefore(row, tbody.firstChild);
                 stt++;
             });
         });
 
-        // Xóa lịch sử trên Firebase
+        // Xóa lịch sử cũ bị lỗi trên Firebase
         function clearHistory() {
-            if (confirm("Bạn có chắc chắn muốn xóa toàn bộ lịch sử cảnh báo trên Database không?")) {
+            if (confirm("Bạn có chắc chắn muốn xóa sạch toàn bộ lịch sử cũ (bị lỗi 1970) trên Database không?")) {
                 historyRef.remove().then(() => {
-                    alert("Đã xóa sạch lịch sử!");
+                    alert("Đã xóa sạch lịch sử cũ!");
                 });
             }
         }
 
-        // Xuất file Excel từ danh sách lịch sử hiện có
+        // Xuất file Excel
         function exportToExcel() {
             if (eventLogs.length === 0) {
                 alert("Chưa có sự kiện nào để xuất file!");
@@ -294,7 +319,7 @@
             }
 
             const wsData = [
-                ["STT", "Thời Gian", "Sự Kiện", "Mức Độ"]
+                ["STT", "Thời Gian Thực", "Sự Kiện", "Mức Độ"]
             ];
             eventLogs.forEach(item => {
                 wsData.push([item.stt, item.time, item.event, item.level]);
